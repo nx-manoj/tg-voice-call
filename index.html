@@ -1,15 +1,14 @@
-﻿<!DOCTYPE html>
+@'
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Anonymous Voice Call</title>
-  <!-- Telegram WebApp SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <!-- PeerJS WebRTC Library (Free Peer-to-Peer Audio) -->
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     body {
       background: #0f172a;
       color: #f8fafc;
@@ -20,9 +19,9 @@
       height: 100vh;
       padding: 40px 20px;
     }
-    .header { text-align: center; margin-top: 20px; }
-    .header h2 { font-size: 24px; font-weight: 700; color: #38bdf8; }
-    .header p { color: #94a3b8; font-size: 14px; margin-top: 6px; }
+    .header { text-align: center; margin-top: 15px; }
+    .header h2 { font-size: 22px; font-weight: 700; color: #38bdf8; }
+    .header p { color: #94a3b8; font-size: 13px; margin-top: 4px; }
 
     .avatar-container {
       display: flex;
@@ -31,14 +30,14 @@
       margin: auto 0;
     }
     .avatar-pulse {
-      width: 140px;
-      height: 140px;
+      width: 130px;
+      height: 130px;
       border-radius: 50%;
       background: #1e293b;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 56px;
+      font-size: 50px;
       box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.4);
       animation: pulse 2s infinite;
     }
@@ -48,8 +47,8 @@
       100% { box-shadow: 0 0 0 0 rgba(56, 189, 248, 0); }
     }
     .status-text {
-      margin-top: 20px;
-      font-size: 18px;
+      margin-top: 18px;
+      font-size: 17px;
       font-weight: 600;
       color: #38bdf8;
     }
@@ -86,12 +85,12 @@
 
   <div class="header">
     <h2>Anonymous Voice Call</h2>
-    <p>End-to-End Encrypted • Identity Hidden</p>
+    <p>Encrypted • No phone numbers exchanged</p>
   </div>
 
   <div class="avatar-container">
     <div class="avatar-pulse" id="avatarIcon">🎙️</div>
-    <div class="status-text" id="statusText">Connecting...</div>
+    <div class="status-text" id="statusText">Requesting Mic Access...</div>
     <div class="timer-text" id="timerText">00:00</div>
   </div>
 
@@ -100,17 +99,16 @@
     <button class="btn btn-end" onclick="endCall()">📞</button>
   </div>
 
-  <audio id="remoteAudio" autoplay></audio>
+  <!-- Audio playback element for stranger's voice -->
+  <audio id="remoteAudio" autoplay playsinline></audio>
 
   <script>
-    // Initialize Telegram WebApp
     const tg = window.Telegram ? window.Telegram.WebApp : null;
     if (tg) {
       tg.expand();
       tg.enableClosingConfirmation();
     }
 
-    // Parse URL parameters: ?room=ROOM_ID&role=caller|receiver
     const urlParams = new URLSearchParams(window.location.search);
     const room = urlParams.get('room') || 'test_room';
     const role = urlParams.get('role') || 'caller';
@@ -125,55 +123,78 @@
     let seconds = 0;
     let timerInterval = null;
 
+    // Google Free STUN servers to punch through NAT & Mobile firewalls
+    const peerConfig = {
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
+          { urls: 'stun:stun3.l.google.com:19302' },
+          { urls: 'stun:stun4.l.google.com:19302' }
+        ]
+      }
+    };
+
     async function start() {
       try {
-        // Request Microphone permission
-        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-        
-        peer = new Peer(myPeerId);
+        localStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          },
+          video: false
+        });
+
+        document.getElementById('statusText').innerText = 'Connecting server...';
+
+        peer = new Peer(myPeerId, peerConfig);
 
         peer.on('open', (id) => {
-          document.getElementById('statusText').innerText = 'Calling stranger...';
+          document.getElementById('statusText').innerText = 'Waiting for stranger to join...';
+          
           if (role === 'caller') {
-            // Initiate the call
-            setTimeout(() => {
-              callPartner();
-            }, 1500);
+            // Keep retrying call until receiver opens their WebApp
+            const callInterval = setInterval(() => {
+              if (call) {
+                clearInterval(callInterval);
+                return;
+              }
+              document.getElementById('statusText').innerText = 'Calling stranger...';
+              const outgoing = peer.call(remotePeerId, localStream);
+              if (outgoing) {
+                handleCall(outgoing);
+              }
+            }, 2000);
           }
         });
 
         peer.on('call', (incomingCall) => {
-          document.getElementById('statusText').innerText = 'Connected!';
+          document.getElementById('statusText').innerText = 'Connecting audio...';
           incomingCall.answer(localStream);
           handleCall(incomingCall);
         });
 
         peer.on('error', (err) => {
-          console.error(err);
-          document.getElementById('statusText').innerText = 'Reconnecting...';
-          setTimeout(callPartner, 2000);
+          console.error('Peer error:', err);
         });
 
       } catch (err) {
-        document.getElementById('statusText').innerText = 'Mic permission denied';
-        alert('Please allow microphone access to use voice call.');
-      }
-    }
-
-    function callPartner() {
-      if (!peer || call) return;
-      document.getElementById('statusText').innerText = 'Ringing stranger...';
-      const outgoingCall = peer.call(remotePeerId, localStream);
-      if (outgoingCall) {
-        handleCall(outgoingCall);
+        console.error(err);
+        document.getElementById('statusText').innerText = 'Microphone blocked';
+        alert('Please allow microphone permissions in Telegram to speak!');
       }
     }
 
     function handleCall(c) {
       call = c;
+
       call.on('stream', (remoteStream) => {
-        document.getElementById('statusText').innerText = 'In Call 🟢';
-        document.getElementById('remoteAudio').srcObject = remoteStream;
+        document.getElementById('statusText').innerText = 'Connected 🟢 (Speaking)';
+        const audio = document.getElementById('remoteAudio');
+        audio.srcObject = remoteStream;
+        audio.play().catch(e => console.log('Audio autoplay retry', e));
         startTimer();
       });
 
@@ -214,10 +235,11 @@
       document.getElementById('statusText').innerText = 'Call Ended';
       setTimeout(() => {
         if (tg) tg.close();
-      }, 800);
+      }, 600);
     }
 
     window.onload = start;
   </script>
 </body>
 </html>
+'@ | Out-File -Encoding utf8 voice.html
